@@ -1,0 +1,45 @@
+[package]
+name = "discord-screen-poc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "poc"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+windows-core = "0.61"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+str0m = { version = "0.25", default-features = false, features = ["wincrypto"] }
+tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
+windows = { version = "0.61", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_MediaFoundation",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_Variant",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.dev]
+opt-level = 1
