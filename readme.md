@@ -698,3 +698,48 @@ As decisões abaixo deverão ser validadas por protótipos:
 - Suporte futuro para macOS e Linux.
 
 **Prioridade absoluta:** entregar primeiro uma transmissão funcional entre dois computadores. A interface, autenticação e funcionalidades adicionais devem ser construídas em torno de um pipeline de vídeo comprovadamente funcional.
+
+---
+
+# 16. O que já está no repositório e o que falta
+
+As fases 1 a 6 foram escritas em código. Nenhum `cargo build`, `cargo test` ou teste entre dois computadores foi executado na máquina em que isso foi escrito. O critério de cada fase continua aberto até essa verificação.
+
+## Como rodar, em casa
+
+```text
+cargo test --manifest-path signaling/Cargo.toml
+cargo run --manifest-path signaling/Cargo.toml -- 8787
+cargo build --release --manifest-path poc/Cargo.toml
+powershell -File installer/install.ps1 -Signal http://IP:8787
+```
+
+Variáveis do servidor, sem commitar segredo:
+
+- `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `PUBLIC_URL`
+- O redirect do app Discord é `{PUBLIC_URL}/auth/callback`
+- `UPDATE_VERSION` e `UPDATE_URL`, só quando houver um binário publicado
+
+Comandos da PoC: `poc login`, `poc tray`, `poc host`, `poc view`, `poc update`, `poc whoami`, `poc logout`. O modo `poc host` / `poc view` sem `--signal` continua local, em `127.0.0.1`.
+
+## Decisões já tomadas no protótipo
+
+- WebRTC com `str0m`, não com libdatachannel.
+- Captura com Windows.Graphics.Capture e encode H.264 com Media Foundation.
+- A PoC é um binário Rust com janela Win32. Tauri 2 e React não foram criados.
+- O client secret do Discord fica só no servidor. A sessão local usa DPAPI.
+- A atualização baixa o executável anunciado por `GET /update` e o troca no próximo processo.
+
+## Necessidades restantes
+
+1. Compilar `signaling/` e `poc/` e corrigir o que o compilador apontar.
+2. Medir 720p a 30 fps entre dois computadores. A sinalização da sala já sai do localhost. O modo local não.
+3. Captura de janela e escolha de monitor. Hoje só o monitor principal entra, em 1280×720.
+4. Criar a aplicação no Discord, preencher as três variáveis e passar por `poc login` antes de abrir uma sala.
+5. Confirmar a bandeja: transmitir, assistir, encerrar e iniciar com o Windows sem janela principal.
+6. Confirmar reconexão, o limite de 4 espectadores e a queda de bitrate no log do host.
+7. Decidir se TURN é necessário depois do teste em redes diferentes. Não há TURN.
+8. Gerar o release, instalar com `installer/install.ps1` e abrir pelo menu Iniciar.
+9. Assinar o executável quando existir certificado. Sem `SIGN_THUMBPRINT`, o instalador não assina.
+10. Publicar a URL do binário em `UPDATE_URL` para a atualização automática ter o que baixar.
+11. macOS e Linux continuam fora do escopo.

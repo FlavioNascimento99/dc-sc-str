@@ -30,6 +30,7 @@ pub struct Encoder {
     sample_time: i64,
     force_keyframe: bool,
     alignment: u32,
+    fps: u32,
     /// O MFT assíncrono já pediu entrada e ainda não recebeu ProcessInput.
     need_input: bool,
 }
@@ -66,6 +67,7 @@ impl Encoder {
             sample_time: 0,
             force_keyframe: true,
             alignment,
+            fps: 30,
             need_input: false,
         })
     }
@@ -94,6 +96,7 @@ impl Encoder {
             sample_time: 0,
             force_keyframe: true,
             alignment,
+            fps: 30,
             need_input: false,
         })
     }
@@ -110,6 +113,21 @@ impl Encoder {
         self.force_keyframe = true;
     }
 
+    pub fn fps(&self) -> u32 {
+        self.fps
+    }
+
+    pub fn retarget(&mut self, bitrate: u32, fps: u32) {
+        let fps = fps.clamp(10, 30);
+        self.fps = fps;
+        if let Err(err) = unsafe { apply_rate(&self.transform, bitrate, fps) } {
+            eprintln!("encoder: taxa recusada ({err:#})");
+        } else {
+            eprintln!("encoder: {bitrate} bps a {fps} fps");
+        }
+        self.force_keyframe = true;
+    }
+
     pub fn encode(&mut self, nv12: &[u8]) -> Result<Option<Vec<u8>>> {
         if nv12.len() != color::nv12_len() {
             anyhow::bail!("NV12 com {} bytes, esperado {}", nv12.len(), color::nv12_len());
@@ -121,9 +139,9 @@ impl Encoder {
         let sample = memory_sample(nv12, self.alignment)?;
         unsafe {
             sample.SetSampleTime(self.sample_time)?;
-            sample.SetSampleDuration(10_000_000 / 30)?;
+            sample.SetSampleDuration(10_000_000 / self.fps as i64)?;
         }
-        self.sample_time += 10_000_000 / 30;
+        self.sample_time += 10_000_000 / self.fps as i64;
 
         let events = self.events.clone();
         let mut output = if let Some(events) = events {
@@ -338,6 +356,17 @@ fn input_alignment(transform: &IMFTransform) -> u32 {
 
 /// Empacota dois UINT32 no formato do Media Foundation: o de cima fica nos bits altos.
 /// Frame size: largura embaixo, altura em cima. Frame rate: denominador embaixo, numerador em cima.
+unsafe fn apply_rate(transform: &IMFTransform, bitrate: u32, fps: u32) -> Result<()> {
+    let output = transform
+        .GetOutputCurrentType(0)
+        .or_else(|_| transform.GetOutputAvailableType(0, 0))
+        .context("tipo de saída")?;
+    output.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
+    output.SetUINT64(&MF_MT_FRAME_RATE, pack_u32(1, fps))?;
+    transform.SetOutputType(0, &output, 0).context("atualizar taxa")?;
+    Ok(())
+}
+
 pub(crate) fn pack_u32(low: u32, high: u32) -> u64 {
     ((high as u64) << 32) | low as u64
 }

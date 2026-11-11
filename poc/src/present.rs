@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Gdi::{GetStockObject, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRect, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetClientRect, LoadCursorW, PeekMessageW, PostQuitMessage, RegisterClassExW, SetWindowTextW,
+    GetClientRect, IsWindow, LoadCursorW, PeekMessageW, RegisterClassExW, SetWindowTextW,
     ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MSG,
     PM_REMOVE, SW_SHOW, WINDOW_EX_STYLE, WM_CLOSE, WM_DESTROY, WM_QUIT, WNDCLASSEXW,
     WS_OVERLAPPEDWINDOW,
@@ -29,11 +29,27 @@ use windows::Win32::Foundation::HMODULE;
 
 use crate::color::{self, HEIGHT, WIDTH};
 
-pub fn run(latest: Arc<Mutex<Option<Vec<u8>>>>, received: Arc<Mutex<u64>>) -> Result<()> {
-    unsafe { show_window(latest, received) }
+pub struct Viewer {
+    hwnd: HWND,
+    context: ID3D11DeviceContext,
+    swap: IDXGISwapChain1,
+    latest: Arc<Mutex<Option<Vec<u8>>>>,
+    received: Arc<Mutex<u64>>,
+    presented: u64,
+    started: Instant,
+    last_title: Instant,
 }
 
-unsafe fn show_window(latest: Arc<Mutex<Option<Vec<u8>>>>, received: Arc<Mutex<u64>>) -> Result<()> {
+impl Viewer {
+    pub fn open(latest: Arc<Mutex<Option<Vec<u8>>>>, received: Arc<Mutex<u64>>) -> Result<Self> {
+        unsafe { Self::open_window(latest, received) }
+    }
+
+    pub fn tick(&mut self) -> Result<bool> {
+        unsafe { self.draw() }
+    }
+
+    unsafe fn open_window(latest: Arc<Mutex<Option<Vec<u8>>>>, received: Arc<Mutex<u64>>) -> Result<Self> {
     let instance = GetModuleHandleW(None)?;
     let class_name = w!("PocViewWindow");
     let wc = WNDCLASSEXW {
@@ -47,7 +63,10 @@ unsafe fn show_window(latest: Arc<Mutex<Option<Vec<u8>>>>, received: Arc<Mutex<u
         ..Default::default()
     };
     if RegisterClassExW(&wc) == 0 {
-        anyhow::bail!("RegisterClassExW falhou");
+        let err = windows::core::Error::from_win32();
+        if err.code().0 != 1410 {
+            return Err(err).context("RegisterClassExW");
+        }
     }
     let mut rect = RECT {
         left: 0,
@@ -72,35 +91,60 @@ unsafe fn show_window(latest: Arc<Mutex<Option<Vec<u8>>>>, received: Arc<Mutex<u
     )?;
     let _ = ShowWindow(hwnd, SW_SHOW);
     let (_device, context, swap) = swap_chain(hwnd)?;
-    let mut msg = MSG::default();
-    let mut presented = 0u64;
-    let started = Instant::now();
-    let mut last_title = Instant::now();
-    loop {
-        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-            if msg.message == WM_QUIT {
-                return Ok(());
-            }
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+    Ok(Self {
+        hwnd,
+        context,
+        swap,
+        latest,
+        received,
+        presented: 0,
+        started: Instant::now(),
+        last_title: Instant::now(),
+    })
+    }
+
+    unsafe fn draw(&mut self) -> Result<bool> {
+        if !IsWindow(self.hwnd).as_bool() {
+            return Ok(false);
         }
-        if let Some(bgra) = latest.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        if let Some(bgra) = self.latest.lock().unwrap_or_else(|e| e.into_inner()).take() {
             if bgra.len() == color::bgra_len() {
-                present(&context, &swap, &bgra)?;
-                presented += 1;
+                present(&self.context, &self.swap, &bgra)?;
+                self.presented += 1;
             }
         }
-        if last_title.elapsed() >= Duration::from_secs(1) {
-            let got = *received.lock().unwrap_or_else(|e| e.into_inner());
+        if self.last_title.elapsed() >= Duration::from_secs(1) {
+            let got = *self.received.lock().unwrap_or_else(|e| e.into_inner());
             let title = format!(
-                "poc view  recebidos {got}  desenhados {presented}  {:.0}s",
-                started.elapsed().as_secs_f32()
+                "discord-companion  recebidos {got}  desenhados {}  {:.0}s",
+                self.presented,
+                self.started.elapsed().as_secs_f32()
             );
             let wide: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
-            let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr()));
-            last_title = Instant::now();
+            let _ = SetWindowTextW(self.hwnd, windows::core::PCWSTR(wide.as_ptr()));
+            self.last_title = Instant::now();
         }
-        std::thread::sleep(Duration::from_millis(4));
+        Ok(true)
+    }
+}
+
+pub fn run(latest: Arc<Mutex<Option<Vec<u8>>>>, received: Arc<Mutex<u64>>) -> Result<()> {
+    unsafe {
+        let mut viewer = Viewer::open_window(latest, received)?;
+        let mut msg = MSG::default();
+        loop {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                if msg.message == WM_QUIT {
+                    return Ok(());
+                }
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            if !viewer.draw()? {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(4));
+        }
     }
 }
 
@@ -159,10 +203,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let _ = DestroyWindow(hwnd);
             LRESULT(0)
         }
-        WM_DESTROY => {
-            PostQuitMessage(0);
-            LRESULT(0)
-        }
+        WM_DESTROY => LRESULT(0),
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
